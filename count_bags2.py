@@ -4,86 +4,40 @@ os.environ["FLAGS_use_mkldnn"] = "False"
 from ultralytics import YOLO
 import cv2
 import re
-import numpy as np
 from collections import Counter
 from paddleocr import PaddleOCR
 from openpyxl import Workbook, load_workbook
 from datetime import datetime
 
-# ----------------------------
-# PATHS
-# ----------------------------
+# ---------------- PATHS ----------------
 BASE_PATH = r"D:\Projects\Age group\IFFCO"
-MODEL_PATH = os.path.join(BASE_PATH, "best (3).pt")
-VIDEO_PATH = os.path.join(BASE_PATH, "clipped_wagon_video.mp4")
+MODEL_PATH = os.path.join(BASE_PATH, "best.pt")
+VIDEO_PATH = os.path.join(BASE_PATH, "videoplayback.mp4")
 EXCEL_PATH = os.path.join(BASE_PATH, "wagon_data.xlsx")
 
-# ----------------------------
-# LOAD MODEL
-# ----------------------------
+# ---------------- LOAD MODEL ----------------
 model = YOLO(MODEL_PATH)
 cap = cv2.VideoCapture(VIDEO_PATH)
 
 cv2.namedWindow("IFFCO Cement Monitoring", cv2.WINDOW_NORMAL)
 
-# ----------------------------
-# OCR
-# ----------------------------
+# ---------------- OCR ----------------
 ocr = PaddleOCR(use_angle_cls=True, lang='en')
 
-# ----------------------------
-# EXCEL SETUP
-# ----------------------------
+# ---------------- EXCEL SETUP ----------------
 if not os.path.exists(EXCEL_PATH):
     wb = Workbook()
     ws = wb.active
     ws.append([
         "Date", "Time", "Wagon Number",
         "Door1 Count", "Door2 Count",
-        "NP Bags", "DAP Bags",
         "Total"
     ])
     wb.save(EXCEL_PATH)
 
-# ----------------------------
-# COLOR DETECTION
-# ----------------------------
-def detect_product_color(crop):
-
-    h, w = crop.shape[:2]
-    crop = crop[int(h*0.2):int(h*0.8), int(w*0.2):int(w*0.8)]
-
-    hsv = cv2.cvtColor(crop, cv2.COLOR_BGR2HSV)
-    saturation_mask = hsv[:, :, 1] > 20
-
-    lower_green = np.array([40, 60, 50])
-    upper_green = np.array([85, 255, 255])
-
-    lower_blue = np.array([90, 20, 40])
-    upper_blue = np.array([145, 255, 255])
-
-    green_mask = cv2.inRange(hsv, lower_green, upper_green)
-    blue_mask = cv2.inRange(hsv, lower_blue, upper_blue)
-
-    green_pixels = cv2.countNonZero(green_mask & saturation_mask)
-    blue_pixels = cv2.countNonZero(blue_mask & saturation_mask)
-
-    total_pixels = crop.shape[0] * crop.shape[1]
-
-    if green_pixels / total_pixels > 0.20:
-        return "DAP"
-    elif blue_pixels / total_pixels > 0.05:
-        return "NP"
-    else:
-        return "Unknown"
-
-# ----------------------------
-# COUNTERS
-# ----------------------------
+# ---------------- COUNTERS ----------------
 door1_count = 0
 door2_count = 0
-np_count = 0
-dap_count = 0
 
 counted_d1 = set()
 counted_d2 = set()
@@ -92,9 +46,9 @@ wagon_number_text = ""
 wagon_detected = False
 wagon_candidates = []
 
-print("Processing...")
-
 frame_count = 0
+
+print("Processing...")
 
 while True:
     ret, frame = cap.read()
@@ -115,7 +69,7 @@ while True:
 
     if results[0].boxes.id is not None:
 
-        # ---------------- PASS 1: COLLECT DOORS ----------------
+        # -------- COLLECT DOORS --------
         for box, track_id, cls in zip(
             results[0].boxes.xyxy,
             results[0].boxes.id,
@@ -130,27 +84,19 @@ while True:
         # Sort doors left → right
         doors = sorted(doors, key=lambda d: d[0])
 
-        # Draw door labels
+        # -------- DRAW DOORS --------
         for i, (dx1, dy1, dx2, dy2) in enumerate(doors):
 
-            if i == 0:
-                color = (0, 255, 0)       # D1 green
-            else:
-                color = (0, 165, 255)     # D2 orange
+            color = (0,255,0) if i == 0 else (0,165,255)
 
             cv2.rectangle(frame, (dx1, dy1), (dx2, dy2), color, 3)
+            cv2.putText(frame, f"D{i+1}",
+                        (dx1, dy1 - 10),
+                        cv2.FONT_HERSHEY_SIMPLEX,
+                        1,
+                        (0,255,255), 3)
 
-            cv2.putText(
-                frame,
-                f"D{i+1}",
-                (dx1, dy1 - 10),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                1,
-                (0, 255, 255),
-                3
-            )
-
-        # ---------------- PASS 2: PROCESS OBJECTS ----------------
+        # -------- PROCESS OBJECTS --------
         for box, track_id, cls in zip(
             results[0].boxes.xyxy,
             results[0].boxes.id,
@@ -161,14 +107,13 @@ while True:
             track_id = int(track_id)
             class_id = int(cls)
 
-            cv2.rectangle(frame, (x1, y1), (x2, y2), (255,255,0), 2)
+            cv2.rectangle(frame, (x1, y1), (x2, y2),
+                          (255,255,0), 2)
 
-            # ---------------- BAG LOGIC ----------------
-            if class_id == 0:
+            # -------- BAG COUNTING ONLY --------
+            if class_id == 0:  # cement_bag
 
-                center = ((x1 + x2)//2, (y1 + y2)//2)
-                bag_crop = frame[y1:y2, x1:x2]
-                product_type = detect_product_color(bag_crop)
+                center = ((x1+x2)//2, (y1+y2)//2)
 
                 # Door 1
                 if len(doors) > 0:
@@ -177,10 +122,6 @@ while True:
                         if track_id not in counted_d1:
                             counted_d1.add(track_id)
                             door1_count += 1
-                            if product_type == "NP":
-                                np_count += 1
-                            elif product_type == "DAP":
-                                dap_count += 1
 
                 # Door 2
                 if len(doors) > 1:
@@ -189,12 +130,8 @@ while True:
                         if track_id not in counted_d2:
                             counted_d2.add(track_id)
                             door2_count += 1
-                            if product_type == "NP":
-                                np_count += 1
-                            elif product_type == "DAP":
-                                dap_count += 1
 
-            # ---------------- ROBUST WAGON OCR ----------------
+            # -------- WAGON OCR --------
             if class_id == 2 and not wagon_detected:
 
                 if frame_count % 5 != 0:
@@ -202,13 +139,11 @@ while True:
 
                 pad = 40
                 crop = frame[
-                    max(0, y1-pad):min(frame.shape[0], y2+pad),
-                    max(0, x1-pad):min(frame.shape[1], x2+pad)
+                    max(0,y1-pad):min(frame.shape[0],y2+pad),
+                    max(0,x1-pad):min(frame.shape[1],x2+pad)
                 ]
 
                 crop = cv2.resize(crop, None, fx=2, fy=2)
-
-                # Enhance contrast
                 gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
                 gray = cv2.equalizeHist(gray)
 
@@ -216,34 +151,25 @@ while True:
 
                 if result and result[0]:
                     for line in result[0]:
-
                         text = line[1][0].upper()
                         text = re.sub(r'[^A-Z0-9 ]', '', text)
 
                         tokens = text.split()
-
                         for token in tokens:
                             if len(token) >= 3:
                                 wagon_candidates.append(token)
 
-                # Stabilization
                 if len(wagon_candidates) > 30:
-
                     counter = Counter(wagon_candidates)
-
-                    stable_tokens = [
-                        token for token, count in counter.items()
-                        if count > 4
-                    ]
-
-                    if stable_tokens:
-                        wagon_number_text = " ".join(stable_tokens)
+                    stable = [t for t,c in counter.items() if c > 4]
+                    if stable:
+                        wagon_number_text = " ".join(stable)
                         wagon_detected = True
                         print("Wagon Locked:", wagon_number_text)
 
     total = door1_count + door2_count
 
-    # ---------------- DISPLAY ----------------
+    # -------- DISPLAY --------
     cv2.putText(frame, f"D1: {door1_count}", (40,50),
                 cv2.FONT_HERSHEY_SIMPLEX,1,(0,255,0),3)
 
@@ -253,13 +179,7 @@ while True:
     cv2.putText(frame, f"Total: {total}", (40,150),
                 cv2.FONT_HERSHEY_SIMPLEX,1,(0,0,255),3)
 
-    cv2.putText(frame, f"NP: {np_count}", (40,200),
-                cv2.FONT_HERSHEY_SIMPLEX,1,(0,255,255),3)
-
-    cv2.putText(frame, f"DAP: {dap_count}", (40,250),
-                cv2.FONT_HERSHEY_SIMPLEX,1,(0,255,0),3)
-
-    cv2.putText(frame, f"Wagon: {wagon_number_text}", (40,300),
+    cv2.putText(frame, f"Wagon: {wagon_number_text}", (40,220),
                 cv2.FONT_HERSHEY_SIMPLEX,1,(0,0,255),3)
 
     cv2.imshow("IFFCO Cement Monitoring", frame)
@@ -270,7 +190,7 @@ while True:
 cap.release()
 cv2.destroyAllWindows()
 
-# ---------------- SAVE FINAL DATA ----------------
+# -------- SAVE FINAL DATA --------
 if wagon_number_text != "":
     now = datetime.now()
     total = door1_count + door2_count
@@ -284,18 +204,14 @@ if wagon_number_text != "":
         wagon_number_text,
         door1_count,
         door2_count,
-        np_count,
-        dap_count,
         total
     ])
 
     wb.save(EXCEL_PATH)
-    print("Final Data Saved to Excel ✔")
+    print("Final Data Saved ✔")
 
-print("Final Summary")
+print("\nFinal Summary")
 print("D1:", door1_count)
 print("D2:", door2_count)
-print("NP:", np_count)
-print("DAP:", dap_count)
 print("Total:", total)
 print("Wagon:", wagon_number_text)
