@@ -15,7 +15,7 @@ from datetime import datetime
 # ----------------------------
 BASE_PATH = r"D:\Projects\Age group\IFFCO"
 MODEL_PATH = os.path.join(BASE_PATH, "best (3).pt")
-VIDEO_PATH = os.path.join(BASE_PATH, "clipped_wagon_video.mp4")
+VIDEO_PATH = os.path.join(BASE_PATH, "clipped_wagon_video.avi")
 EXCEL_PATH = os.path.join(BASE_PATH, "wagon_data.xlsx")
 
 # ----------------------------
@@ -194,53 +194,121 @@ while True:
                             elif product_type == "DAP":
                                 dap_count += 1
 
-            # ---------------- ROBUST WAGON OCR ----------------
+            # ---------------- ROBUST WAGON OCR (DUAL-PIPELINE) ----------------
             if class_id == 2 and not wagon_detected:
 
+                # Run every 5th frame to save FPS (running 2 OCRs is expensive)
                 if frame_count % 5 != 0:
                     continue
 
-                pad = 40
-                crop = frame[
-                    max(0, y1-pad):min(frame.shape[0], y2+pad),
-                    max(0, x1-pad):min(frame.shape[1], x2+pad)
-                ]
+                pad = 70
+                # Ensure crop is safe
+                y_min, y_max = max(0, y1-pad), min(frame.shape[0], y2+pad)
+                x_min, x_max = max(0, x1-pad), min(frame.shape[1], x2+pad)
+                crop = frame[y_min:y_max, x_min:x_max]
 
-                crop = cv2.resize(crop, None, fx=2, fy=2)
+                if crop.size == 0: continue
 
-                # Enhance contrast
-                gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
-                gray = cv2.equalizeHist(gray)
+                # --- PIPELINE A: DETAIL ORIENTED (Best for Video 2 / Thin Text) ---
+                # Strategy: Upscale + CLAHE to enhance local contrast of thin lines
+                img_A = cv2.resize(crop, None, fx=1.5, fy=1.5, interpolation=cv2.INTER_CUBIC)
+                gray_A = cv2.cvtColor(img_A, cv2.COLOR_BGR2GRAY)
+                clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8,8))
+                input_A = clahe.apply(gray_A)
 
-                result = ocr.ocr(gray, cls=True)
+                # --- PIPELINE B: SHAPE ORIENTED (Best for Video 1 / Thick Hazy Text) ---
+                # Strategy: Downscale (0.8) to prevent blobbing + Invert + Otsu
+                img_B = cv2.resize(crop, None, fx=0.8, fy=0.8, interpolation=cv2.INTER_AREA)
+                gray_B = cv2.cvtColor(img_B, cv2.COLOR_BGR2GRAY)
+                # Blur slightly to smooth edges before thresholding
+                blurred_B = cv2.GaussianBlur(gray_B, (3,3), 0)
+                _, input_B = cv2.threshold(blurred_B, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
 
-                if result and result[0]:
-                    for line in result[0]:
+                # --- COMPETITION: Run Both & Pick the Winner ---
+                attempts = [("Detail", input_A), ("Aggressive", input_B)]
+                
+                best_conf = 0.0
+                best_tokens = []
 
-                        text = line[1][0].upper()
-                        text = re.sub(r'[^A-Z0-9 ]', '', text)
+                for name, img_input in attempts:
+                    # Optional: View what the AI sees
+                    # cv2.imshow(f"Pipeline {name}", img_input)
 
-                        tokens = text.split()
+                    result = ocr.ocr(img_input, cls=True)
+                    
+                    current_conf = 0.0
+                    current_tokens = []
+                    count = 0
 
-                        for token in tokens:
-                            if len(token) >= 3:
-                                wagon_candidates.append(token)
+                    if result and result[0]:
+                        for line in result[0]:
+                            text = line[1][0].upper()
+                            conf = line[1][1]
+                            
+                            # Clean special chars
+                            text = re.sub(r'[^A-Z0-9 ]', '', text)
+                            tokens = text.split()
+                            
+                            for token in tokens:
+                                # SMART FILTER: Ignore Hindi hallucinations
+                                if len(token) >= 3:
+                                    is_valid = False
+                                    if any(c.isdigit() for c in token): # It's a number
+                                        is_valid = True
+                                    elif token in ["BCNA", "BOXN", "BHL", "HSM"]: # It's a code
+                                        is_valid = True
+                                    
+                                    if is_valid:
+                                        current_tokens.append(token)
+                                        current_conf += conf
+                                        count += 1
+                    
+                    # Calculate score for this pipeline
+                    if count > 0:
+                        avg_conf = current_conf / count
+                        # Check if this pipeline is better than the previous best
+                        if avg_conf > best_conf:
+                            best_conf = avg_conf
+                            best_tokens = current_tokens
+                
+                # --- PROCESS WINNER ---
+                if best_tokens:
+                    # Add winning tokens to the candidate list
+                    for token in best_tokens:
+                        wagon_candidates.append(token)
 
-                # Stabilization
-                if len(wagon_candidates) > 30:
+                # --- STABILIZATION ---
+                buffer_size = 60
+                if len(wagon_candidates) > buffer_size:
+                    recent = wagon_candidates[-buffer_size:]
+                    counter = Counter(recent)
+                    
+                    # 1. Gather all tokens that meet the stability threshold
+                    stable_tokens = [token for token, count in counter.items() if count >= 5]
 
-                    counter = Counter(wagon_candidates)
-
-                    stable_tokens = [
-                        token for token, count in counter.items()
-                        if count > 4
-                    ]
-
-                    if stable_tokens:
-                        wagon_number_text = " ".join(stable_tokens)
+                    # Lock if we have at least 2 parts
+                    if len(stable_tokens) >= 2:
+                        
+                        # 2. Sort by LAST appearance in the buffer.
+                        # This overrides early blurry mistakes and trusts the spatial order of the most recent frame.
+                        stable_tokens.sort(key=lambda x: len(recent) - recent[::-1].index(x))
+                        
+                        # 3. SMART FORMATTER: Separate into Codes (contains letters) and Numbers (pure digits)
+                        codes = [t for t in stable_tokens if any(c.isalpha() for c in t)]
+                        nums = [t for t in stable_tokens if not any(c.isalpha() for c in t)]
+                        
+                        # 4. Interleave them to force the "BCNA 310925 HSM1 17725" pattern
+                        formatted_parts = []
+                        for i in range(max(len(codes), len(nums))):
+                            if i < len(codes):
+                                formatted_parts.append(codes[i])
+                            if i < len(nums):
+                                formatted_parts.append(nums[i])
+                                
+                        wagon_number_text = " ".join(formatted_parts)
                         wagon_detected = True
-                        print("Wagon Locked:", wagon_number_text)
-
+                        print(f"Wagon Locked: {wagon_number_text} (Conf: {best_conf:.2f})")
+                        
     total = door1_count + door2_count
 
     # ---------------- DISPLAY ----------------
