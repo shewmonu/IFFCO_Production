@@ -61,21 +61,38 @@ wagons using a **Dual-Model YOLOv8 architecture**.
 
 ## 🧠 Model Architecture
 
-### 1️⃣ Main Tracking Model --- `best (3).pt`
+The system uses two custom YOLOv8 models working together.
 
-  Class ID   Label
-  ---------- --------------
-  0          cement_bag
-  1          wagon_door
-  2          wagon_number
+---
 
-------------------------------------------------------------------------
+### 1️⃣ Main Tracking Model — `best (3).pt`
 
-### 2️⃣ Wagon Segmentation Model --- `best (4).pt`
+**Detected Classes:**
 
-  Class ID   Label
-  ---------- ------------
-  1          wagon_body
+- **0 → cement_bag**
+- **1 → wagon_door**
+- **2 → wagon_number**
+
+**Responsibilities:**
+
+- Detect cement bags
+- Detect wagon doors
+- Detect wagon number plates
+- Provide tracking IDs for bag counting
+
+---
+
+### 2️⃣ Wagon Segmentation Model — `best (4).pt`
+
+**Detected Classes:**
+
+- **1 → wagon_body**
+
+**Responsibilities:**
+
+- Generate wagon boundary polygon
+- Filter detections outside wagon
+- Reduce background interference
 
 ------------------------------------------------------------------------
 
@@ -101,25 +118,25 @@ OCR operations are restricted strictly inside this polygon.
 
 ### 🔢 Smart Bag Counting
 
--   Uses persistent tracking IDs (BoT-SORT)\
--   Each bag counted only once\
+-   Uses persistent tracking IDs (BoT-SORT)
+-   Each bag counted only once
 -   Verified when bag center intersects door bounding box
 
 ### 🔍 Robust Dual-Pipeline OCR
 
-Detail Pipeline: - Upscaling\
+Detail Pipeline: - Upscaling
 - CLAHE enhancement
 
-Morphology Pipeline: - Downscaling\
-- Gaussian blur\
+Morphology Pipeline: - Downscaling
+- Gaussian blur
 - Otsu inverse thresholding
 
 ### 🗄 Automated PostgreSQL Logging
 
-Stores: - Date & Time\
-- Wagon Number\
-- Door counts\
-- NP/DAP breakdown\
+Stores: - Date & Time
+- Wagon Number
+- Door counts
+- NP/DAP breakdown
 - Total bags
 
 ------------------------------------------------------------------------
