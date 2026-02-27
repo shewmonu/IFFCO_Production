@@ -78,10 +78,9 @@ wagon_number_text = ""
 wagon_detected = False
 wagon_candidates = []
 
-print("Processing with Optimized Dual-Model Architecture...")
+print("Processing with Stable Dual-Model Architecture...")
 
 frame_count = 0
-wagon_poly = None  # INITIALIZE CACHE OUTSIDE LOOP
 
 while True:
     ret, frame = cap.read()
@@ -89,30 +88,24 @@ while True:
     frame_count += 1
 
     # ========================================================================
-    # PASS 0: WAGON POLYGON (Run Segmentation ONLY every 5 frames)
+    # PASS 0: WAGON POLYGON
     # ========================================================================
-    if frame_count % 5 == 1 or wagon_poly is None:
-        results_wagon = model_wagon.predict(frame, conf=0.30, imgsz=640, verbose=False)
-        wagon_poly_temp = None
-        
-        if results_wagon[0].masks is not None:
-            for mask_xy, cls in zip(results_wagon[0].masks.xy, results_wagon[0].boxes.cls):
-                if int(cls) == 1:  # Class 1 is Wagon in best(4).pt
-                    if len(mask_xy) > 0:
-                        wagon_poly_temp = np.array(mask_xy, dtype=np.int32)
-                        break 
-        
-        wagon_poly = wagon_poly_temp
-
-    # Draw the cached polygon
-    if wagon_poly is not None:
-        cv2.polylines(frame, [wagon_poly], isClosed=True, color=(255, 0, 255), thickness=4)
-        cv2.putText(frame, "WAGON BOUNDARY", tuple(wagon_poly[0]), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 0, 255), 3)
+    wagon_poly = None
+    results_wagon = model_wagon.predict(frame, conf=0.30, verbose=False)
+    
+    if results_wagon[0].masks is not None:
+        for mask_xy, cls in zip(results_wagon[0].masks.xy, results_wagon[0].boxes.cls):
+            if int(cls) == 1:  # Class 1 is Wagon in best(4).pt
+                if len(mask_xy) > 0:
+                    wagon_poly = np.array(mask_xy, dtype=np.int32)
+                    cv2.polylines(frame, [wagon_poly], isClosed=True, color=(255, 0, 255), thickness=4)
+                    cv2.putText(frame, "WAGON BOUNDARY", tuple(wagon_poly[0]), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 0, 255), 3)
+                    break 
 
     # ========================================================================
     # PASS 1 & 2: DOORS, BAGS, AND OCR (Using best(3).pt)
     # ========================================================================
-    results = model_main.track(frame, persist=True, tracker="botsort.yaml", conf=0.30, imgsz=640, verbose=False)
+    results = model_main.track(frame, persist=True, tracker="botsort.yaml", conf=0.30, imgsz=960, verbose=False)
 
     if results[0].boxes.id is not None:
         
@@ -127,7 +120,7 @@ while True:
                 x1, y1, x2, y2 = map(int, box)
                 center = ((x1 + x2) // 2, (y1 + y2) // 2)
                 
-                # POLYGON FILTER: Only track doors INSIDE the cached wagon
+                # POLYGON FILTER: Only track doors INSIDE the wagon
                 if wagon_poly is not None and cv2.pointPolygonTest(wagon_poly, center, False) >= 0:
                     if tid not in door_assignments:
                         current_frame_unassigned.append({'tid': tid, 'x1': x1, 'box': (x1, y1, x2, y2)})
@@ -175,11 +168,11 @@ while True:
                             if product_type == "NP": np_count += 1
                             elif product_type == "DAP": dap_count += 1
 
-            # ROBUST WAGON OCR 
+            # ROBUST WAGON OCR (IDENTICAL TO WORKING SCRIPT)
             if class_id == 2 and not wagon_detected: 
                 center = ((x1 + x2)//2, (y1 + y2)//2)
                 
-                # POLYGON FILTER: Only read plates INSIDE the cached wagon
+                # POLYGON FILTER: Only read plates INSIDE the wagon
                 if wagon_poly is not None and cv2.pointPolygonTest(wagon_poly, center, False) >= 0:
                     
                     if frame_count % 5 != 0: continue
@@ -190,47 +183,67 @@ while True:
                     crop = frame[y_min:y_max, x_min:x_max]
                     if crop.size == 0: continue
 
-                    # --- PIPELINE A: DETAIL (Best for Night Video) ---
+                    # --- PIPELINE A ---
                     img_A = cv2.resize(crop, None, fx=1.5, fy=1.5, interpolation=cv2.INTER_CUBIC)
                     gray_A = cv2.cvtColor(img_A, cv2.COLOR_BGR2GRAY)
                     clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8,8))
                     input_A = clahe.apply(gray_A)
 
-                    # --- PIPELINE B: AGGRESSIVE (Best for Daytime Video - NO DILATION) ---
-                    img_B = cv2.resize(crop, None, fx=0.8, fy=0.8, interpolation=cv2.INTER_AREA)
+                    # --- PIPELINE B ---
+                    img_B = cv2.resize(crop, None, fx=0.9, fy=0.9, interpolation=cv2.INTER_AREA)
                     gray_B = cv2.cvtColor(img_B, cv2.COLOR_BGR2GRAY)
                     blurred_B = cv2.GaussianBlur(gray_B, (3,3), 0)
                     _, input_B = cv2.threshold(blurred_B, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
 
-                    attempts = [("Detail", input_A), ("Aggressive", input_B)]
+                    attempts = [("Detail", input_A), ("Morphology", input_B)]
                     
-                    best_score = 0.0  # ACCUMULATED SCORE LOGIC
+                    best_conf = 0.0
                     best_tokens = []
 
                     for name, img_input in attempts:
                         result = ocr.ocr(img_input, cls=True)
-                        current_conf, current_tokens = 0.0, []
+                        
+                        current_conf = 0.0
+                        current_tokens = []
+                        count = 0
 
                         if result and result[0]:
                             for line in result[0]:
-                                text = re.sub(r'[^A-Z0-9 ]', '', line[1][0].upper())
+                                text = line[1][0].upper()
                                 conf = line[1][1]
-                                for token in text.split():
-                                    if len(token) >= 3 and (any(c.isdigit() for c in token) or token in ["BCNA", "BOXN", "BHL", "HSM", "MAC"]):
-                                        current_tokens.append(token)
-                                        current_conf += conf  # ACCUMULATE
+                                
+                                text = re.sub(r'[^A-Z0-9 ]', '', text)
+                                tokens = text.split()
+                                
+                                for token in tokens:
+                                    if len(token) >= 3:
+                                        is_valid = False
+                                        if any(c.isdigit() for c in token): 
+                                            is_valid = True
+                                        elif token in ["BCNA", "BOXN", "BHL", "HSM"]: 
+                                            is_valid = True
+                                        
+                                        if is_valid:
+                                            current_tokens.append(token)
+                                            current_conf += conf
+                                            count += 1
                         
-                        # Pipeline with the most valid text wins
-                        if current_conf > best_score:
-                            best_score = current_conf
-                            best_tokens = current_tokens
+                        if count > 0:
+                            avg_conf = current_conf / count
+                            if avg_conf > best_conf:
+                                best_conf = avg_conf
+                                best_tokens = current_tokens
                     
-                    if best_tokens: wagon_candidates.extend(best_tokens)
+                    if best_tokens:
+                        for token in best_tokens:
+                            wagon_candidates.append(token)
 
+                    # --- FAST STABILIZATION ---
                     buffer_size = 15 
                     if len(wagon_candidates) > buffer_size:
                         recent = wagon_candidates[-buffer_size:]
                         counter = Counter(recent)
+                        
                         stable_tokens = [token for token, count in counter.items() if count >= 3]
 
                         codes = [t for t in stable_tokens if any(c.isalpha() for c in t)]
@@ -244,7 +257,7 @@ while True:
                             codes = [t for t in stable_tokens if any(c.isalpha() for c in t)]
                             nums = [t for t in stable_tokens if not any(c.isalpha() for c in t)]
                             
-                            primary_codes = ["BCNA", "BOXN", "BHL", "MAC"]
+                            primary_codes = ["BCNA", "BOXN", "BHL"]
                             codes.sort(key=lambda x: 0 if any(p in x for p in primary_codes) else 1)
                             nums.sort(key=lambda x: len(x), reverse=True)
                             
@@ -255,7 +268,8 @@ while True:
                                     
                             wagon_number_text = " ".join(formatted_parts)
                             wagon_detected = True
-                            print(f"Wagon Locked: {wagon_number_text} (Score: {best_score:.2f} | Mode: {'Fallback' if fallback_lock and not standard_lock else 'Standard'})")
+                            lock_type = "Fallback" if fallback_lock and not standard_lock else "Standard"
+                            print(f"Wagon Locked: {wagon_number_text} (Conf: {best_conf:.2f} | Mode: {lock_type})")
 
     # HUD & DISPLAY
     total = door1_count + door2_count
