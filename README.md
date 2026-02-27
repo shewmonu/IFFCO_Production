@@ -15,12 +15,12 @@ wagons using a **Dual-Model YOLOv8 architecture**.
 
 ## 📌 Project Highlights
 
--   🟣 Dual-Model Detection + Segmentation Architecture\
--   🚪 Dynamic Door-wise Bag Tracking\
--   🎨 HSV-Based Real-Time Product Classification (NP vs DAP)\
--   🔍 Competitive Dual-Pipeline OCR\
--   🧠 BoT-SORT Multi-Object Tracking\
--   🗄 Automated PostgreSQL Logging\
+-   🟣 Dual-Model Detection + Segmentation Architecture
+-   🚪 Dynamic Door-wise Bag Tracking
+-   🎨 HSV-Based Real-Time Product Classification (NP vs DAP)
+-   🔍 Competitive Dual-Pipeline OCR
+-   🧠 BoT-SORT Multi-Object Tracking
+-   🗄 Automated PostgreSQL Logging
 -   🏭 Designed for Industrial Deployment
 
 ------------------------------------------------------------------------
@@ -29,11 +29,9 @@ wagons using a **Dual-Model YOLOv8 architecture**.
 
 ### 🔷 High-Level Architecture Diagram
 
-```{=html}
 <p align="center">
   <img src="assets/architecture-diagram.png" alt="IFFCO Architecture Diagram" width="750"/>
 </p>
-```
 
 ------------------------------------------------------------------------
 
