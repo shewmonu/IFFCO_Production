@@ -31,9 +31,7 @@ wagons using a **Dual-Model YOLOv8 architecture**.
 
 ```{=html}
 <p align="center">
-```
-`<img src="assets/architecture-diagram.png" alt="IFFCO Architecture Diagram" width="750"/>`{=html}
-```{=html}
+  <img src="assets/architecture-diagram.png" alt="IFFCO Architecture Diagram" width="750"/>
 </p>
 ```
 
