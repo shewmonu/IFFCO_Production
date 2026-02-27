@@ -5,7 +5,6 @@
 ![PaddleOCR](https://img.shields.io/badge/OCR-PaddleOCR-orange)
 ![PostgreSQL](https://img.shields.io/badge/Database-PostgreSQL-blue)
 ![OpenCV](https://img.shields.io/badge/OpenCV-ComputerVision-green)
-![Status](https://img.shields.io/badge/Status-Production%20Ready-success)
 
 An advanced industrial-grade computer vision pipeline designed to
 monitor, count, classify, and log cement bags being loaded into railway
